@@ -1,139 +1,243 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PeerShip Ultra HQ</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-    <style>
-        .gradient-bg { background: radial-gradient(circle at top right, #1e293b, #0f172a); }
-        #qrcode img { margin: 0 auto; border: 8px solid white; border-radius: 8px; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>P2P File Transfer</title>
+
+<!-- Tailwind -->
+<script src="https://cdn.tailwindcss.com"></script>
+
+<!-- PeerJS -->
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+
+<style>
+body { background-color: #0f172a; }
+.drop-zone.dragover { border-color: #22d3ee; background-color: #1e293b; }
+</style>
 </head>
-<body class="gradient-bg text-slate-200 min-h-screen flex items-center justify-center p-4">
+<body class="text-white min-h-screen flex items-center justify-center p-4">
 
-    <div class="max-w-md w-full bg-slate-900/80 backdrop-blur-xl rounded-[2.5rem] p-8 shadow-2xl border border-white/10">
-        <header class="text-center mb-8">
-            <h1 class="text-2xl font-black tracking-tighter text-white">PEER<span class="text-blue-500">SHIP</span> HQ</h1>
-            <p class="text-xs text-slate-500 uppercase tracking-widest mt-1">Calidad Original • Sin Servidores</p>
-        </header>
+<div class="w-full max-w-2xl space-y-6">
 
-        <div id="myIdContainer" class="bg-black/40 rounded-3xl p-6 mb-6 text-center border border-white/5">
-            <p class="text-[10px] text-blue-400 font-bold uppercase mb-4">Tu código de recepción</p>
-            <div id="qrcode" class="mb-4 flex justify-center"></div>
-            <div id="myId" class="font-mono text-sm text-slate-400 break-all bg-slate-800/50 p-2 rounded-lg cursor-pointer hover:text-white transition-colors">Cargando identidad...</div>
-        </div>
+<h1 class="text-3xl font-bold text-center text-cyan-400">P2P File Transfer</h1>
 
-        <div class="flex gap-2 mb-8">
-            <input type="text" id="remoteId" placeholder="Pegar ID del destino" class="flex-1 bg-slate-800 border border-white/10 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
-            <button id="btnConnect" class="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-2xl text-sm font-bold transition-all active:scale-95">Conectar</button>
-        </div>
+<!-- Generate ID -->
+<div class="space-y-2">
+<button id="generateIdBtn"
+class="w-full py-3 bg-cyan-500 hover:bg-cyan-400 rounded-xl text-lg font-semibold transition">
+Generar ID de transferencia
+</button>
+<p id="myId" class="text-center text-sm text-gray-400 break-all"></p>
+</div>
 
-        <div id="dropZone" class="group border-2 border-dashed border-slate-700 rounded-3xl p-10 text-center mb-6 cursor-pointer hover:border-blue-500/50 hover:bg-blue-500/5 transition-all">
-            <input type="file" id="fileInput" class="hidden">
-            <div id="uploadUI">
-                <div class="text-4xl mb-3 group-hover:scale-110 transition-transform">🖼️</div>
-                <p class="text-sm font-medium">Suelte la imagen HQ</p>
-                <p class="text-xs text-slate-500 mt-1">PNG, JPG, RAW o Video</p>
-            </div>
-        </div>
+<!-- Connect -->
+<div class="space-y-2">
+<input id="peerIdInput" type="text"
+placeholder="Pega aquí el ID del otro dispositivo"
+class="w-full p-3 rounded-xl bg-slate-800 border border-slate-700 focus:outline-none">
+<button id="connectBtn"
+class="w-full py-3 bg-emerald-500 hover:bg-emerald-400 rounded-xl font-semibold transition">
+Conectar
+</button>
+</div>
 
-        <div id="status" class="text-center text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4">Esperando conexión...</div>
-        
-        <a id="downloadBtn" class="hidden flex items-center justify-center gap-2 w-full bg-gradient-to-r from-green-500 to-emerald-600 text-white py-4 rounded-2xl font-black text-sm shadow-xl shadow-green-900/20 hover:brightness-110 transition-all animate-bounce">
-            <span>📥 DESCARGAR CALIDAD ORIGINAL</span>
-        </a>
-    </div>
+<!-- Drag Drop -->
+<div id="dropZone"
+class="drop-zone border-2 border-dashed border-slate-600 rounded-2xl p-10 text-center transition cursor-pointer">
+<p class="text-gray-400">Arrastra y suelta tu archivo aquí</p>
+<input type="file" id="fileInput" class="hidden">
+</div>
 
-    <script>
-        const peer = new Peer();
-        let conn = null;
+<!-- Progress -->
+<div class="space-y-2 hidden" id="progressContainer">
+<div class="w-full bg-slate-700 rounded-full h-4">
+<div id="progressBar" class="bg-cyan-500 h-4 rounded-full" style="width: 0%"></div>
+</div>
+<p id="progressText" class="text-sm text-gray-400 text-center"></p>
+</div>
 
-        // Al iniciar, generar mi ID y su QR
-        peer.on('open', id => {
-            document.getElementById('myId').innerText = id;
-            new QRCode(document.getElementById("qrcode"), {
-                text: id,
-                width: 128,
-                height: 128,
-                colorDark : "#000000",
-                colorLight : "#ffffff",
-                correctLevel : QRCode.CorrectLevel.H
-            });
-        });
+<!-- Preview -->
+<div id="previewContainer" class="hidden space-y-4 text-center">
+<img id="imagePreview" class="max-h-64 mx-auto rounded-xl shadow-lg">
+<button id="downloadBtn"
+class="py-3 px-6 bg-indigo-500 hover:bg-indigo-400 rounded-xl font-semibold transition disabled:opacity-50"
+disabled>
+Descargar
+</button>
+</div>
 
-        // Copiar ID al portapapeles
-        document.getElementById('myId').onclick = () => {
-            navigator.clipboard.writeText(document.getElementById('myId').innerText);
-            alert("ID copiado");
-        };
+<p id="status" class="text-center text-sm text-yellow-400"></p>
 
-        // Recibir conexión
-        peer.on('connection', c => {
-            conn = c;
-            initHandlers();
-        });
+</div>
 
-        // Iniciar conexión manualmente
-        document.getElementById('btnConnect').onclick = () => {
-            const rId = document.getElementById('remoteId').value.trim();
-            if(!rId) return alert("Introduce un ID");
-            conn = peer.connect(rId);
-            initHandlers();
-        };
+<script>
+let peer;
+let connection;
+let selectedFile;
+let receivedBuffers = [];
+let receivedSize = 0;
+let fileMeta;
 
-        function initHandlers() {
-            document.getElementById('status').innerText = "Estableciendo vínculo...";
-            
-            conn.on('open', () => {
-                document.getElementById('status').innerText = "🟢 Conectado con éxito";
-                document.getElementById('status').classList.replace('text-slate-500', 'text-green-400');
-                
-                // Si elijo archivo después de conectar
-                document.getElementById('fileInput').onchange = (e) => {
-                    const file = e.target.files[0];
-                    if (file) {
-                        document.getElementById('status').innerText = "Enviando: " + file.name;
-                        conn.send({
-                            file: file,
-                            name: file.name,
-                            type: file.type
-                        });
-                    }
-                };
-            });
+const CHUNK_SIZE = 64 * 1024;
 
-            // RECIBIR DATOS
-            conn.on('data', data => {
-                document.getElementById('status').innerText = "✅ ¡Archivo Recibido!";
-                
-                // Crear objeto de descarga
-                const blob = new Blob([data.file], { type: data.type });
-                const url = window.URL.createObjectURL(blob);
-                const btn = document.getElementById('downloadBtn');
-                btn.href = url;
-                btn.download = data.name;
-                btn.classList.remove('hidden');
-                
-                document.getElementById('uploadUI').innerHTML = `
-                    <div class="text-green-500 font-bold text-sm">Listo para guardar</div>
-                    <div class="text-xs text-slate-400 truncate mt-1">${data.name}</div>
-                `;
-            });
+const generateIdBtn = document.getElementById('generateIdBtn');
+const myIdText = document.getElementById('myId');
+const peerIdInput = document.getElementById('peerIdInput');
+const connectBtn = document.getElementById('connectBtn');
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const progressBar = document.getElementById('progressBar');
+const progressText = document.getElementById('progressText');
+const progressContainer = document.getElementById('progressContainer');
+const statusText = document.getElementById('status');
+const previewContainer = document.getElementById('previewContainer');
+const imagePreview = document.getElementById('imagePreview');
+const downloadBtn = document.getElementById('downloadBtn');
 
-            conn.on('close', () => {
-                document.getElementById('status').innerText = "Conexión perdida";
-                document.getElementById('status').classList.add('text-red-500');
-            });
-        }
+generateIdBtn.onclick = () => {
+peer = new Peer();
 
-        // Trigger input file
-        document.getElementById('dropZone').onclick = () => {
-            if(!conn) alert("Primero conecta con otro dispositivo");
-            else document.getElementById('fileInput').click();
-        };
-    </script>
+peer.on('open', id => {
+myIdText.textContent = "Tu ID: " + id;
+statusText.textContent = "Esperando conexión...";
+});
+
+peer.on('connection', conn => {
+connection = conn;
+setupConnection();
+});
+
+peer.on('error', err => {
+statusText.textContent = "Error: " + err;
+});
+};
+
+connectBtn.onclick = () => {
+if (!peer) {
+statusText.textContent = "Primero genera tu ID.";
+return;
+}
+connection = peer.connect(peerIdInput.value.trim());
+setupConnection();
+};
+
+function setupConnection() {
+connection.on('open', () => {
+statusText.textContent = "Conectado ✔";
+});
+
+connection.on('data', data => {
+if (data.type === "meta") {
+fileMeta = data;
+receivedBuffers = [];
+receivedSize = 0;
+progressContainer.classList.remove("hidden");
+}
+else if (data.type === "chunk") {
+receivedBuffers.push(data.data);
+receivedSize += data.data.byteLength;
+updateProgress(receivedSize, fileMeta.size);
+if (receivedSize === fileMeta.size) {
+finishReceive();
+}
+}
+});
+
+connection.on('close', () => {
+statusText.textContent = "Conexión cerrada.";
+});
+
+connection.on('error', err => {
+statusText.textContent = "Error conexión: " + err;
+});
+}
+
+dropZone.addEventListener('click', () => fileInput.click());
+
+dropZone.addEventListener('dragover', e => {
+e.preventDefault();
+dropZone.classList.add('dragover');
+});
+
+dropZone.addEventListener('dragleave', () => {
+dropZone.classList.remove('dragover');
+});
+
+dropZone.addEventListener('drop', e => {
+e.preventDefault();
+dropZone.classList.remove('dragover');
+selectedFile = e.dataTransfer.files[0];
+sendFile();
+});
+
+fileInput.addEventListener('change', e => {
+selectedFile = e.target.files[0];
+sendFile();
+});
+
+function sendFile() {
+if (!connection || !connection.open) {
+statusText.textContent = "No hay conexión activa.";
+return;
+}
+if (!selectedFile) return;
+
+connection.send({
+type: "meta",
+name: selectedFile.name,
+size: selectedFile.size,
+mime: selectedFile.type
+});
+
+progressContainer.classList.remove("hidden");
+
+let offset = 0;
+const reader = new FileReader();
+
+reader.onload = e => {
+connection.send({ type: "chunk", data: e.target.result });
+offset += e.target.result.byteLength;
+updateProgress(offset, selectedFile.size);
+
+if (offset < selectedFile.size) {
+readSlice(offset);
+}
+};
+
+function readSlice(o) {
+const slice = selectedFile.slice(o, o + CHUNK_SIZE);
+reader.readAsArrayBuffer(slice);
+}
+
+readSlice(0);
+}
+
+function updateProgress(sent, total) {
+const percent = (sent / total) * 100;
+progressBar.style.width = percent + "%";
+progressText.textContent = Math.floor(percent) + "%";
+}
+
+function finishReceive() {
+const blob = new Blob(receivedBuffers, { type: fileMeta.mime });
+progressText.textContent = "Transferencia completa ✔";
+downloadBtn.disabled = false;
+downloadBtn.onclick = () => {
+const url = URL.createObjectURL(blob);
+const a = document.createElement("a");
+a.href = url;
+a.download = fileMeta.name;
+a.click();
+URL.revokeObjectURL(url);
+};
+
+if (fileMeta.mime.startsWith("image/")) {
+imagePreview.src = URL.createObjectURL(blob);
+previewContainer.classList.remove("hidden");
+}
+}
+</script>
+
 </body>
 </html>
