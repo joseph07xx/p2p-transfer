@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
+    <title>P2P SHIP · Transferencia directa de archivos</title>
+    <!-- Tailwind (modo oscuro por defecto) + ajustes minimalistas -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PeerJS (versión estable) -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        /* Estilos extra para drag & drop y barras sutiles */
+        .drag-active { outline: 2px solid #3b82f6; background-color: rgba(59,130,246,0.1); transition: 0.1s; }
+        .progress-bar { transition: width 0.25s ease; }
+        .preview-img { max-width: 100%; max-height: 160px; object-fit: contain; border-radius: 0.75rem; }
+        /* scroll minimalista */
+        body { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+    </style>
+</head>
+<body class="bg-[#0a0c10] text-gray-200 min-h-screen flex items-center justify-center p-3 sm:p-4">
+
+    <!-- Tarjeta principal: limpia, oscura, moderna -->
+    <div class="max-w-xl w-full bg-[#1e1f25] rounded-3xl shadow-2xl border border-white/5 overflow-hidden">
+
+        <!-- Cabecera con título sutil -->
+        <div class="px-5 pt-6 pb-2 border-b border-white/5 flex items-center justify-between">
+            <h1 class="text-xl font-medium tracking-tight text-white/90 flex items-center gap-2">
+                <span class="text-blue-400 text-2xl">⚡</span> peerShip
+            </h1>
+            <span class="text-xs bg-white/5 px-3 py-1.5 rounded-full text-white/40">bit‑a‑bit · sin pérdida</span>
+        </div>
+
+        <!-- Área central: drag & drop + info conexión -->
+        <div class="p-5 space-y-5">
+
+            <!-- TARJETA DROP ZONE + PREVIEW (si hay archivo) -->
+            <div id="dropZone" class="relative border-2 border-dashed border-white/10 rounded-2xl p-5 text-center transition-all cursor-pointer bg-black/20">
+                <input type="file" id="fileInput" class="hidden" multiple="false" accept="*/*">
+
+                <div id="dropPlaceholder" class="py-4">
+                    <div class="text-5xl mb-3 opacity-40">📁</div>
+                    <div class="text-sm text-white/40 font-mono">arrastra cualquier archivo</div>
+                    <div class="text-xs text-white/20 mt-1">o haz clic para explorar</div>
+                </div>
+
+                <!-- Vista previa (oculta inicialmente) -->
+                <div id="previewArea" class="hidden flex-col items-center gap-3 mt-2">
+                    <div id="previewImage" class="w-full flex justify-center"></div>
+                    <div class="text-sm text-white/70 truncate max-w-full px-2" id="previewFileName"></div>
+                    <div class="text-xs text-white/30" id="previewFileSize"></div>
+                    <button id="clearFileBtn" class="text-xs bg-white/5 hover:bg-white/10 px-4 py-1.5 rounded-full text-white/50 transition-colors">elegir otro</button>
+                </div>
+            </div>
+
+            <!-- Botones de control ID y estado -->
+            <div class="grid grid-cols-2 gap-3">
+                <button id="generateIdBtn" class="bg-blue-600 hover:bg-blue-500 active:scale-[0.98] text-white font-medium py-4 rounded-xl text-base shadow-lg shadow-blue-600/20 transition-all flex items-center justify-center gap-2">
+                    <span>🆔</span> Generar ID
+                </button>
+                <div class="relative">
+                    <input type="text" id="peerIdInput" placeholder="ID del otro dispositivo" class="w-full h-full bg-black/30 border border-white/10 rounded-xl px-4 py-4 text-sm text-white/80 placeholder-white/20 focus:outline-none focus:ring-1 focus:ring-blue-500/50">
+                </div>
+            </div>
+
+            <!-- Botón conectar / desconectar + ID propio (si existe) -->
+            <div class="flex items-center gap-3">
+                <button id="connectBtn" disabled class="bg-white/5 text-white/30 py-3 px-5 rounded-xl text-sm font-medium flex-1 border border-white/5 disabled:cursor-not-allowed transition-all">
+                    🔌 Conectar
+                </button>
+                <div id="myIdDisplay" class="text-xs bg-black/30 text-white/30 px-3 py-2 rounded-xl font-mono truncate" title="Tu ID aparecerá aquí">———</div>
+            </div>
+
+            <!-- Barra de progreso (dinámica) y estado -->
+            <div class="space-y-2">
+                <div class="h-2 w-full bg-white/5 rounded-full overflow-hidden">
+                    <div id="progressBar" class="progress-bar h-full bg-blue-500 w-0"></div>
+                </div>
+                <div id="transferStatus" class="text-xs text-white/30 flex justify-between items-center">
+                    <span>🟢 esperando acción</span>
+                    <span id="progressPercent">0%</span>
+                </div>
+            </div>
+
+            <!-- Botón de descarga (oculto hasta recibir) + info receptor -->
+            <div class="flex gap-3 items-center">
+                <a id="downloadBtn" download class="flex-1 bg-white/10 text-center text-white/70 py-4 rounded-xl font-medium opacity-0 pointer-events-none transition-all hover:bg-white/20 flex items-center justify-center gap-2">
+                    ⬇️ Descargar archivo
+                </a>
+                <div id="remotePeerStatus" class="text-xs text-white/20 w-16 text-right">—</div>
+            </div>
+        </div>
+
+        <!-- Pie de página con advertencia P2P -->
+        <div class="px-5 py-4 bg-black/30 text-white/20 text-[0.65rem] flex justify-between border-t border-white/5">
+            <span>⚡ sin servidor · peerjs</span>
+            <span>🔒 cifrado directo</span>
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            // ---------- CONFIG ----------
+            const fileInput = document.getElementById('fileInput');
+            const dropZone = document.getElementById('dropZone');
+            const dropPlaceholder = document.getElementById('dropPlaceholder');
+            const previewArea = document.getElementById('previewArea');
+            const previewImage = document.getElementById('previewImage');
+            const previewFileName = document.getElementById('previewFileName');
+            const previewFileSize = document.getElementById('previewFileSize');
+            const clearFileBtn = document.getElementById('clearFileBtn');
+
+            const generateIdBtn = document.getElementById('generateIdBtn');
+            const peerIdInput = document.getElementById('peerIdInput');
+            const connectBtn = document.getElementById('connectBtn');
+            const myIdDisplay = document.getElementById('myIdDisplay');
+            const remotePeerStatus = document.getElementById('remotePeerStatus');
+
+            const progressBar = document.getElementById('progressBar');
+            const transferStatus = document.getElementById('transferStatus').querySelector('span:first-child');
+            const progressPercent = document.getElementById('progressPercent');
+            const downloadBtn = document.getElementById('downloadBtn');
+
+            // Estado de la app
+            let peer = null;                // instancia PeerJS
+            let myPeerId = null;
+            let currentConnection = null;    // conexión activa (data connection)
+            let selectedFile = null;          // archivo seleccionado para enviar
+            let fileBuffer = null;            // Blob recibido (para descarga)
+            let connectionActive = false;
+
+            // helpers
+            function formatBytes(bytes, decimals = 2) {
+                if (bytes === 0) return '0 Bytes';
+                const k = 1024;
+                const dm = decimals < 0 ? 0 : decimals;
+                const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+                return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+            }
+
+            // Limpiar vista previa y archivo seleccionado
+            function resetSelectedFile() {
+                selectedFile = null;
+                fileInput.value = '';
+                previewArea.classList.add('hidden');
+                dropPlaceholder.classList.remove('hidden');
+                previewImage.innerHTML = '';
+                previewFileName.textContent = '';
+                previewFileSize.textContent = '';
+            }
+
+            // Manejar nuevo archivo seleccionado (desde input o drop)
+            function handleFile(file) {
+                if (!file) return;
+                // Solo un archivo, pero por si acaso drag de varios: tomamos el primero
+                if (file.type) {
+                    selectedFile = file;
+                } else {
+                    selectedFile = file[0] || file;
+                }
+                if (!selectedFile) return;
+
+                // Mostrar preview si es imagen
+                previewImage.innerHTML = '';
+                if (selectedFile.type.startsWith('image/')) {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        const img = document.createElement('img');
+                        img.src = e.target.result;
+                        img.className = 'preview-img';
+                        previewImage.appendChild(img);
+                    };
+                    reader.readAsDataURL(selectedFile);
+                } else {
+                    // icono genérico para archivo no imagen
+                    previewImage.innerHTML = '<div class="text-5xl opacity-40 my-2">📄</div>';
+                }
+
+                previewFileName.textContent = selectedFile.name;
+                previewFileSize.textContent = formatBytes(selectedFile.size);
+                dropPlaceholder.classList.add('hidden');
+                previewArea.classList.remove('hidden');
+            }
+
+            // Eventos drag & drop
+            dropZone.addEventListener('click', () => fileInput.click());
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropZone.classList.add('drag-active');
+            });
+            dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-active'));
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('drag-active');
+                const files = e.dataTransfer.files;
+                if (files.length > 0) handleFile(files[0]);
+            });
+
+            fileInput.addEventListener('change', (e) => {
+                if (fileInput.files.length > 0) handleFile(fileInput.files[0]);
+            });
+
+            clearFileBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                resetSelectedFile();
+            });
+
+            // ---------- PEERJS LÓGICA ----------
+            function resetConnectionUI() {
+                if (currentConnection) {
+                    currentConnection.close();
+                    currentConnection = null;
+                }
+                connectionActive = false;
+                connectBtn.disabled = true;
+                connectBtn.className = 'bg-white/5 text-white/30 py-3 px-5 rounded-xl text-sm font-medium flex-1 border border-white/5 disabled:cursor-not-allowed transition-all';
+                connectBtn.textContent = '🔌 Conectar';
+                remotePeerStatus.textContent = '—';
+                // no borramos el ID generado
+            }
+
+            // Actualizar estado de conexión
+            function setConnectionStatus(connected, peerIdRemote = null) {
+                connectionActive = connected;
+                if (connected) {
+                    connectBtn.disabled = false;
+                    connectBtn.className = 'bg-red-600/20 text-red-400 hover:bg-red-600/30 py-3 px-5 rounded-xl text-sm font-medium border border-red-600/30 transition-all';
+                    connectBtn.textContent = '⛔ Desconectar';
+                    remotePeerStatus.textContent = peerIdRemote ? peerIdRemote.slice(0,5)+'…' : 'conectado';
+                } else {
+                    connectBtn.disabled = true;
+                    connectBtn.className = 'bg-white/5 text-white/30 py-3 px-5 rounded-xl text-sm font-medium flex-1 border border-white/5 disabled:cursor-not-allowed transition-all';
+                    connectBtn.textContent = '🔌 Conectar';
+                    remotePeerStatus.textContent = '—';
+                }
+            }
+
+            // Iniciar peer (generar ID)
+            generateIdBtn.addEventListener('click', () => {
+                if (peer) {
+                    peer.destroy();
+                    peer = null;
+                    resetConnectionUI();
+                }
+                // Crear nuevo peer (sin argumento de ID para que genere uno aleatorio)
+                peer = new Peer();
+
+                peer.on('open', (id) => {
+                    myPeerId = id;
+                    myIdDisplay.textContent = id;
+                    myIdDisplay.classList.remove('text-white/30');
+                    myIdDisplay.classList.add('text-white/70');
+                    myIdDisplay.title = id;
+                    transferStatus.textContent = '🟢 ID generado, listo';
+                });
+
+                peer.on('connection', (conn) => {
+                    // Alguien se conecta a nosotros (somos receptor potencial)
+                    if (currentConnection) {
+                        conn.close();
+                        return; // ya tenemos una conexión
+                    }
+                    currentConnection = conn;
+                    setConnectionStatus(true, conn.peer);
+                    setupConnection(conn);
+                });
+
+                peer.on('disconnected', () => {
+                    transferStatus.textContent = '⚠️ Desconectado de la red';
+                    resetConnectionUI();
+                });
+
+                peer.on('error', (err) => {
+                    console.warn(err);
+                    transferStatus.textContent = `⚠️ Error: ${err.type}`;
+                    resetConnectionUI();
+                });
+            });
+
+            // Configurar callbacks de una conexión (data connection)
+            function setupConnection(conn) {
+                // Limpiar descarga anterior al conectar nueva
+                downloadBtn.classList.add('opacity-0', 'pointer-events-none');
+                fileBuffer = null;
+
+                conn.on('open', () => {
+                    transferStatus.textContent = '🔗 Conectado. Puedes enviar/recibir.';
+                });
+
+                conn.on('data', (data) => {
+                    // Aquí recibimos metadatos o trozos? Usaremos datos binarios directamente
+                    // Para simplificar, enviamos el archivo como un solo Blob (apto para archivos grandes? PeerJS maneja fragmentación)
+                    // PeerJS soporta transferencia directa de Blob, pero cuidado con tamaño. Para demo funcionará.
+                    // Pero para barra de progreso necesitamos trocear. Implementaremos envío por fragmentos:
+                    // Pero para mantener simple y funcional (progreso), enviamos el archivo como binario y PeerJS ya fragmenta.
+                    // La barra de progreso se puede simular con el evento 'progress'? PeerJS no expone progreso.
+                    // Vamos a usar una aproximación: enviar el archivo como binario, y el receptor reconstruye.
+                    // El emisor parte el archivo manualmente? para demo vamos a usar el metodo más directo:
+                    // Enviar el objeto File como blob. peerJS envía completo, pero sin progreso.
+                    // Para progreso real, usaremos el canal de datos para enviar trozos y calcular.
+                    // Rediseño rápido: vamos a implementar transferencia por trozos (1MB) y metadata.
+                    if (data instanceof ArrayBuffer || data instanceof Blob) {
+                        // Esto es un trozo o archivo completo. pero en nuestra implementación usaremos objeto con metadata.
+                    }
+                });
+
+                // Mejor usamos un protocolo sencillo: primero metadata, luego chunks.
+                // Pero dado el tiempo, usaremos un enfoque más confiable: enviar el archivo como Blob, y la barra de progreso la haremos
+                // con el evento de progreso de la conexión en el envío (solo emisor). PeerJS tiene conn.on('progress', bytesSent)
+                // Perfecto: podemos usar ese evento para progreso.
+
+                conn.on('progress', (bytesSent) => {
+                    if (selectedFile && conn === currentConnection) {
+                        let percent = Math.min(100, (bytesSent / selectedFile.size) * 100);
+                        progressBar.style.width = percent + '%';
+                        progressPercent.textContent = Math.round(percent) + '%';
+                        transferStatus.textContent = '📤 Enviando...';
+                        if (percent >= 99.9) transferStatus.textContent = '📤 Finalizando envío';
+                    }
+                });
+
+                conn.on('data', (incomingData) => {
+                    // esperamos dos tipos: metadata (objeto) o blob/binario final
+                    if (incomingData && incomingData.metadata === 'fileInfo') {
+                        // Recibimos info del archivo: nombre, tamaño, tipo
+                        fileBuffer = {
+                            name: incomingData.name,
+                            size: incomingData.size,
+                            type: incomingData.type,
+                            chunks: [],
+                            receivedBytes: 0
+                        };
+                        transferStatus.textContent = '📥 Recibiendo archivo...';
+                        progressBar.style.width = '0%';
+                        progressPercent.textContent = '0%';
+                    } 
+                    else if (incomingData instanceof Blob || incomingData instanceof ArrayBuffer) {
+                        // es un trozo (Blob o ArrayBuffer)
+                        let chunk = incomingData instanceof Blob ? incomingData : new Blob([incomingData]);
+                        if (fileBuffer) {
+                            fileBuffer.chunks.push(chunk);
+                            fileBuffer.receivedBytes += chunk.size;
+                            let percent = (fileBuffer.receivedBytes / fileBuffer.size) * 100;
+                            progressBar.style.width = percent + '%';
+                            progressPercent.textContent = Math.round(percent) + '%';
+
+                            if (fileBuffer.receivedBytes >= fileBuffer.size) {
+                                // Archivo completo
+                                const fullBlob = new Blob(fileBuffer.chunks, { type: fileBuffer.type });
+                                const url = URL.createObjectURL(fullBlob);
+                                downloadBtn.href = url;
+                                downloadBtn.download = fileBuffer.name || 'descarga';
+                                downloadBtn.classList.remove('opacity-0', 'pointer-events-none');
+                                transferStatus.textContent = '✅ Recibido completo';
+                                progressBar.style.width = '100%';
+                                progressPercent.textContent = '100%';
+
+                                // Si es imagen, mostramos preview
+                                if (fileBuffer.type.startsWith('image/')) {
+                                    const img = document.createElement('img');
+                                    img.src = url;
+                                    img.className = 'preview-img mt-2';
+                                    previewImage.innerHTML = '';
+                                    previewImage.appendChild(img);
+                                    previewFileName.textContent = fileBuffer.name;
+                                    previewFileSize.textContent = formatBytes(fileBuffer.size);
+                                    dropPlaceholder.classList.add('hidden');
+                                    previewArea.classList.remove('hidden');
+                                    selectedFile = null; // para no confundir
+                                }
+                                fileBuffer = null;
+                            }
+                        }
+                    }
+                });
+
+                conn.on('close', () => {
+                    transferStatus.textContent = '❌ Conexión cerrada';
+                    resetConnectionUI();
+                });
+
+                conn.on('error', (err) => {
+                    transferStatus.textContent = '⚠️ Error de conexión';
+                });
+            }
+
+            // Conectar a otro peer
+            function connectToPeer(remoteId) {
+                if (!peer) {
+                    transferStatus.textContent = '⚠️ Genera tu ID primero';
+                    return;
+                }
+                if (currentConnection) {
+                    currentConnection.close();
+                }
+                const conn = peer.connect(remoteId);
+                if (!conn) {
+                    transferStatus.textContent = '⚠️ No se pudo conectar';
+                    return;
+                }
+                currentConnection = conn;
+                setConnectionStatus(true, remoteId);
+                setupConnection(conn);
+            }
+
+            connectBtn.addEventListener('click', () => {
+                if (connectionActive && currentConnection) {
+                    // desconectar
+                    currentConnection.close();
+                    currentConnection = null;
+                    setConnectionStatus(false);
+                    transferStatus.textContent = '🟢 Desconectado';
+                    progressBar.style.width = '0%';
+                    progressPercent.textContent = '0%';
+                } else {
+                    // conectar
+                    const remoteId = peerIdInput.value.trim();
+                    if (!remoteId) {
+                        transferStatus.textContent = '⚠️ Escribe un ID válido';
+                        return;
+                    }
+                    connectToPeer(remoteId);
+                }
+            });
+
+            // Lógica de envío: si tenemos archivo seleccionado y conexión activa, lo mandamos al hacer clic en otro lado? 
+            // Mejor: al seleccionar archivo y tener conexión, automáticamente preguntar? O añadir botón enviar.
+            // Agregamos un pequeño botón "enviar ahora" implícito: podemos usar la preview como activador.
+            // Simplicidad: al seleccionar archivo, si hay conexión, enviamos inmediatamente con confirmación.
+            // Pero puede ser agresivo. Agregamos un botón de "enviar" dentro del preview?
+            // lo haremos discreto: doble clic en la preview envía. Añadimos texto "⚡ enviar ahora" sobre la previsualización.
+            const sendAction = document.createElement('div');
+            sendAction.className = 'text-xs bg-blue-600/30 text-blue-300 px-3 py-1 rounded-full mt-2 cursor-pointer hover:bg-blue-600/50 transition-all';
+            sendAction.textContent = '⬆️ enviar ahora';
+            previewArea.appendChild(sendAction);
+
+            sendAction.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (!selectedFile) {
+                    transferStatus.textContent = '⚠️ No hay archivo';
+                    return;
+                }
+                if (!currentConnection || !connectionActive) {
+                    transferStatus.textContent = '⚠️ No estás conectado';
+                    return;
+                }
+
+                // Enviar metadatos primero
+                const metadata = {
+                    metadata: 'fileInfo',
+                    name: selectedFile.name,
+                    size: selectedFile.size,
+                    type: selectedFile.type || 'application/octet-stream'
+                };
+                currentConnection.send(metadata);
+
+                // Trocear archivo en fragmentos de 16KB para mejor progreso (evitar límites)
+                const CHUNK_SIZE = 16 * 1024; // 16KB
+                let offset = 0;
+                const file = selectedFile;
+                const reader = new FileReader();
+
+                function readNextChunk() {
+                    const slice = file.slice(offset, Math.min(offset + CHUNK_SIZE, file.size));
+                    reader.readAsArrayBuffer(slice);
+                }
+
+                reader.onload = (e) => {
+                    if (e.target.result) {
+                        currentConnection.send(new Blob([e.target.result])); // enviamos como blob
+                        offset += e.target.result.byteLength;
+                        if (offset < file.size) {
+                            readNextChunk();
+                        } else {
+                            transferStatus.textContent = '📤 Envío completado';
+                        }
+                    }
+                };
+                reader.onerror = () => transferStatus.textContent = '⚠️ Error leyendo archivo';
+                readNextChunk();
+                transferStatus.textContent = '📤 Preparando envío...';
+            });
+
+            // Reset descarga si recibe nuevo archivo
+        })();
+    </script>
+</body>
+</html>
